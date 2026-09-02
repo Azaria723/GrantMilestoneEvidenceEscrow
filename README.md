@@ -32,8 +32,10 @@ npm run build
 
 Direct tests execute the actual contract with mocked HTTP/LLM and transfer intents. They are not real validator consensus or live transfer receipts. See [local verification](verification/local-revision.md).
 
-## Deployment gate
+## Deployment verification
 
-The old address `0xfB34BB3338097b22ED036194BB796263920C331A` is incompatible. Deploy the revised source as a new instance (no constructor arguments); do not fund the old address. Then verify deployed source and ABI, run real positive/negative lifecycles, record receipts/balances, connect the frontend to the new address and test wallet/browser state. Local passing tests do not mean submission-ready.
+The revised source is deployed at `0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420` on Studionet. Deployed source equals local source byte-for-byte. A real 0.001 GEN lifecycle executed a forged-binding rejection, incomplete-criteria rejection, corrected approval, protected approved custody, payout, and replay rejection. See the [Studionet ledger](verification/studionet-e2e.md) and committed RPC receipts. The old address `0xfB34BB3338097b22ED036194BB796263920C331A` remains incompatible and must not be used.
+
+This is testnet evidence, not an audit or production-readiness claim. Production hosting remains a separate step.
 
 See [architecture](docs/architecture.md), [threat model](docs/threat-model.md), and [revision correction](docs/revision-fix.md).
