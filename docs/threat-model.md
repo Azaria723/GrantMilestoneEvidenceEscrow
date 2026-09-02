@@ -1,24 +1,16 @@
-# Threat model
-
-## Attacker goals
-
-- Redirect validators to self-authored evidence.
-- Reuse a valid manifest for another grant, milestone, recipient or revision.
-- Obtain a later tranche without completing earlier work.
-- Convert source outage into payout or early refund.
-- Pay or refund a tranche twice.
-- Attach GEN to an invalid plan and leave accounting inconsistent.
+# Threat model and limits
 
 ## Controls
 
-- Source and revision fixed by sponsor; validator URL is contract-derived.
-- SHA-256 byte commitment plus exact subject/version binding.
-- Fixed recipient address and strict sequential claim gate.
-- Closed verdict surface with `UNAVAILABLE` distinct from `REJECTED`.
-- Checks-effects-interactions and terminal states before transfers.
-- Payable validation raises `UserError` before record mutation.
-- Permissionless expiry but sponsor-only fixed refund recipient.
+- Immutable sponsor repository policy; recipient cannot direct verification outside it.
+- Fixed recipient caller for claim/submission; sponsor-only expired refund; payout goes only to recipient.
+- Contract/chain/grant/milestone/recipient/nonce/revision bindings prevent evidence replay.
+- Actual artifact bytes are fetched and hashed; manifest claims alone cannot approve.
+- Same-nonce retry appends assessment history. Corrections use increasing nonces, maximum eight submissions.
+- Approved funds cannot be expired or reclaimed. Outage does not approve or enable premature refund.
+- Sequential claims and terminal paid/refunded states prevent skipped tranches and replay.
+- Invalid payable plans revert before writes; sum uses checked range before custody bookkeeping.
 
-## Epistemic boundary
+## Limits
 
-The manifest and semantic verdict are evidence about delivered artifacts, not proof of their external truth, quality beyond stated criteria, authorship, legality or future availability.
+The sponsor must choose a suitable repository and criteria. This is a repository-constrained delivery agreement, not GitHub author authentication or an independent authoritative registry. A collaborator may publish artifacts; content evaluation does not prove wallet-to-author identity. Public immutable URLs can still become unavailable. Semantic judgment remains probabilistic and may disagree; no payout is allowed on uncertainty. Only bounded UTF-8 artifacts are supported, not binaries or full repository analysis. A failed earlier milestone blocks later claims until their individual refund deadlines. Assessment retries are not count-limited within the time window and incur transaction/storage costs.

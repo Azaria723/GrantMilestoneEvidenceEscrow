@@ -1,61 +1,39 @@
 # GrantMilestoneEvidenceEscrow (GrantGate)
 
-GrantGate is a GenLayer dApp for multi-tranche grants. A sponsor locks the exact sum of every milestone in native GEN and commits an immutable evidence policy before work begins. Each tranche is released only after validators retrieve the sponsor-fixed manifest, verify its content commitment and subject bindings, and agree that concrete deliverables satisfy bounded acceptance criteria.
+A future-work grant dApp: sponsors deposit the exact sum of up to six sequential GEN tranches, fix a recipient and GitHub repository, and set immutable criteria and increasing deadlines. Recipients submit delivery evidence only after doing the work.
 
 ## Why GenLayer
 
-A conventional contract can enforce amounts and deadlines but cannot independently retrieve public deliverable manifests or judge whether reports, releases and artifacts substantively meet written criteria. GenLayer provides the semantic consensus layer; deterministic contract logic retains execution authority over sequencing, custody, payout, expiry and replay prevention.
+Validators retrieve pinned public artifacts, verify their byte commitments and subject bindings, and judge whether their actual text meets the sponsor's written criteria. Deterministic contract code controls custody, permissions, deadlines and one-shot settlement. This does not prove authorship, external truth, code security or scientific impact.
 
-## Scope and non-claims
+## Workflow
 
-GrantGate proves only that a sponsor-committed manifest is retrievable, byte-for-byte committed, bound to the exact grant/milestone/recipient/revision, structurally contains deliverables, and is judged consistent with the stated criteria. It does not prove scientific truth, code security, legal compliance, real-world impact or ownership of arbitrary linked artifacts.
+1. Sponsor calls `create_grant(title, recipient, repository, milestone_plan_json)`, attaching the exact tranche sum. Each plan item has only `amount_wei` (decimal string), `deadline_seconds` (integer offset from creation), and `criteria`.
+2. Recipient calls `claim_milestone(mid)`. The preceding tranche must already be PAID.
+3. Complete and commit artifacts at D. Build an identity-bound manifest and commit it later at E. E is not embedded in itself.
+4. Recipient calls `submit_milestone(mid, expected_nonce, E, D, manifest_sha256)`. Evidence URL is derived from the stored repository, E, grant ID, local milestone index and nonce.
+5. Anyone calls `assess_milestone(mid, expected_nonce)`. Manifest and artifact hashes/bindings must pass before semantic assessment. UNAVAILABLE permits retry. Rejected/unavailable deliveries can be replaced by a new nonce before the delivery deadline, up to eight submissions.
+6. Sponsor or recipient pays an APPROVED tranche. Otherwise, anyone can mark it expired after the applicable deadline and only the sponsor can refund it to the stored sponsor address.
 
-## Mechanism
+SUBMITTED/UNAVAILABLE receive a 24-hour assessment grace after delivery deadline. APPROVED never expires. No new submission after delivery deadline. An expired earlier tranche blocks later claims; those tranches remain refundable after their own expiry.
 
-```text
-Sponsor creates grant and deposits exact tranche sum
-  → immutable manifest base + revision + per-milestone digest committed
-  → fixed recipient claims milestones sequentially
-  → recipient triggers assessment (cannot redirect evidence)
-  → validators fetch and hash the sponsor-fixed manifest
-  → deterministic subject bindings must pass
-  → bounded semantic criteria assessment reaches strict consensus
-  → APPROVED tranche pays exactly once
-  → outage remains retryable; expiry returns only that tranche to sponsor
-```
+## Verification
 
-Statuses: `PLANNED(0)`, `CLAIMED(1)`, `SUBMITTED(2)`, `APPROVED(3)`, `PAID(4)`, `REJECTED(5)`, `REFUNDED(6)`, `UNAVAILABLE(7)`, `EXPIRED(9)`.
-
-## Security invariants
-
-- `total_paid + total_refunded + active_locked = total_deposited`.
-- Deposit must equal the sum of all tranche amounts; invalid payable creation reverts atomically.
-- Recipient identity, manifest origin and immutable revision are fixed at grant creation.
-- A recipient never supplies the evidence URL used by validators.
-- Manifest SHA-256 and exact grant/milestone/recipient/revision bindings are on the approval critical path.
-- Later milestones cannot be claimed before the previous milestone is paid.
-- `UNAVAILABLE` keeps custody frozen and permits retry.
-- Only an expired tranche can be refunded, and only to its stored sponsor.
-- `PAID` and `REFUNDED` are terminal; transfers cannot replay.
-
-## Local verification
+Run from the repository root:
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
 genvm-lint check contracts/GrantMilestoneEvidenceEscrow.py
-python -m pytest tests -q -p no:cacheprovider
-
+python -m pytest tests -q
 cd frontend
-npm install
+node --test src/forms.test.js
 npm run build
 ```
 
-Latest revision separates the evidence-source commit from the deliverable commit and fetches/hashes actual UTF-8 artifact bytes before semantic judgment. See [revision correction and limitations](docs/revision-fix.md).
+Direct tests execute the actual contract with mocked HTTP/LLM and transfer intents. They are not real validator consensus or live transfer receipts. See [local verification](verification/local-revision.md).
 
-Expected contract result: GenVM lint and validation pass; `11 passed` direct security tests.
+## Deployment gate
 
-## Deployment status
+The old address `0xfB34BB3338097b22ED036194BB796263920C331A` is incompatible. Deploy the revised source as a new instance (no constructor arguments); do not fund the old address. Then verify deployed source and ABI, run real positive/negative lifecycles, record receipts/balances, connect the frontend to the new address and test wallet/browser state. Local passing tests do not mean submission-ready.
 
-The contract is locally verified but not yet deployed. After deployment, the required order is source-parity verification, live positive/negative custody lifecycles, transaction/state ledger, frontend address update, production deployment and production readback.
-
-See [architecture](docs/architecture.md), [threat model](docs/threat-model.md), [originality analysis](docs/originality.md), and the empty [Studionet ledger](verification/studionet-e2e.md).
+See [architecture](docs/architecture.md), [threat model](docs/threat-model.md), and [revision correction](docs/revision-fix.md).

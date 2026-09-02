@@ -1,24 +1,16 @@
-# Architecture and proof obligation
+# Proof obligation and lifecycle
 
-## Proof obligation
+Sponsor authority covers the fixed repository, recipient, tranche amounts, criteria and deadlines. Recipient authority covers post-delivery submission of pinned evidence within that repository, not arbitrary external evidence hosts.
 
-For milestone `M` of grant `G`, prove that bytes fetched from the sponsor-committed immutable location match the precommitted digest, identify `G/M`, the fixed recipient and revision exactly, contain bounded deliverable descriptors, and substantively satisfy the acceptance criteria.
+Approval requires: fetched manifest SHA-256; exact chain ID, contract address, grant ID, global milestone ID, local index, recipient, nonce and D bindings; every artifact fetched from the same repository at D and hash checked; bounded semantic PASS against immutable criteria.
 
-The validator produces only consequential semantic facts. It does not authorize a transfer. The contract maps an `APPROVED` finding through lifecycle, sequencing, recipient, amount, remaining-custody and replay checks before transfer.
+Manifests live at `evidence/grant-G/milestone-I/submission-N.json` within evidence commit E. E is stored on-chain, not embedded into its own manifest. Artifacts are limited to 20 UTF-8 files, 30 KB each, 100 KB combined; manifest limit 50 KB. Paths reject traversal, queries and external repositories.
 
-## Consensus binding matrix
+## State transitions
 
-| Field | Origin | Verification | Consequence |
-|---|---|---|---|
-| Manifest bytes | Contract-derived immutable raw GitHub URL | HTTP and size bounds | Acquisition gate |
-| Manifest digest | Sponsor commitment at grant creation | SHA-256 exact equality | Approval gate |
-| Grant/milestone | Manifest | Exact integers | Subject gate |
-| Recipient | Manifest + stored grant | Exact address equality | Identity gate |
-| Revision | Manifest + immutable URL policy | Exact 40-hex equality | Version gate |
-| Deliverables | Manifest | Bounded list and 64-hex digests | Completeness gate |
-| Criteria | Validator judgment | `PASS/FAIL/UNRESOLVED` | Semantic gate |
-| Verdict/code/reason | Derived closed mapping | Strict consensus JSON | State transition |
+PLANNED → CLAIMED → SUBMITTED → APPROVED → PAID.
+Assessment can instead produce REJECTED or UNAVAILABLE. REJECTED/UNAVAILABLE allow new nonce submission until delivery deadline. UNAVAILABLE also allows same-nonce reassessment until review cutoff. Each assessment has an append-only 1-based ID. Previous submission records and assessment results remain readable.
 
-## Recovery
+Delivery deadlines are creation time plus strictly increasing offsets. Assessment of SUBMITTED/UNAVAILABLE is allowed through deadline + 86400 seconds; expiry only after that cutoff. Other nonterminal states expire after delivery deadline. APPROVED cannot expire or refund. Refund requires EXPIRED and stored sponsor caller, and always transfers to stored sponsor.
 
-`UNAVAILABLE` is non-terminal and can be assessed again. Any non-paid milestone may be permissionlessly marked expired only after its deadline. Only the stored sponsor can recover an expired tranche. A late verdict cannot reopen a terminal paid or refunded state.
+Accounting invariant: deposited = paid + refunded + active_locked. Tranche amount is cleared and terminal state committed before emitting transfer. On-chain settlement and transfer-finality still require network tests.
