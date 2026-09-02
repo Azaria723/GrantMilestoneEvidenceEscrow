@@ -33,6 +33,7 @@
 .create-shell { margin-bottom: 20px; }
 .create-toggle { padding: 11px 15px; border: 0; border-radius: 9px; background: #0b1936; color: white; font-weight: 700; cursor: pointer; }
 .create-toggle:disabled { opacity: .45; cursor: not-allowed; }
+.create-form .primary:disabled { opacity: .5; cursor: not-allowed; }
 .create-form { margin-top: 12px; padding: 24px; border: 1px solid #dbe3e5; border-radius: 18px; background: white; }
 .create-form h3 { margin: 0 0 6px; }
 .create-form > p { color: #6c7887; font-size: 12px; }
