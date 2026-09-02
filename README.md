@@ -50,7 +50,9 @@ npm install
 npm run build
 ```
 
-Expected contract result: GenVM lint and validation pass; `6 passed` direct security tests.
+Latest revision separates the evidence-source commit from the deliverable commit and fetches/hashes actual UTF-8 artifact bytes before semantic judgment. See [revision correction and limitations](docs/revision-fix.md).
+
+Expected contract result: GenVM lint and validation pass; `11 passed` direct security tests.
 
 ## Deployment status
 

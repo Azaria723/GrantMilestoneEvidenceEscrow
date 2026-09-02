@@ -3,12 +3,15 @@ import json
 import pytest
 
 REV = "a" * 40
-BASE = f"https://raw.githubusercontent.com/acme/grant-evidence/{REV}/grant-0"
+EVIDENCE_REV = "c" * 40
+BASE = f"https://raw.githubusercontent.com/acme/grant-evidence/{EVIDENCE_REV}/grant-0"
 AMOUNT = 10**15
+ARTIFACT_URL = f'https://raw.githubusercontent.com/acme/grant-evidence/{REV}/report.txt'
+ARTIFACT = b'Synthetic test report: prototype implementation and reproducible results.'
 
 def manifest(recipient, index=0):
     recipient_text = "0x" + recipient.hex() if isinstance(recipient, bytes) else str(recipient)
-    return json.dumps({"grant_id":0,"milestone_index":index,"recipient":recipient_text,"revision":REV,"summary":"Published a working reproducible prototype with documented results.","deliverables":[{"name":"report","url":"https://example.org/report.pdf","sha256":"b"*64}]}, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps({"grant_id":0,"milestone_index":index,"recipient":recipient_text,"deliverable_revision":REV,"summary":"Published a working reproducible prototype with documented results.","deliverables":[{"name":"report","url":ARTIFACT_URL,"sha256":hashlib.sha256(ARTIFACT).hexdigest()}]}, sort_keys=True, separators=(",", ":")).encode()
 
 def deploy_grant(vm, deploy, sponsor, recipient, raw=None, count=1):
     vm.strict_mocks=True; vm.check_pickling=True
@@ -20,18 +23,23 @@ def deploy_grant(vm, deploy, sponsor, recipient, raw=None, count=1):
         plan.append({"amount_wei":AMOUNT,"deadline_seconds":3600*(i+1),"criteria":"A working prototype and reproducible report must be delivered.","manifest_sha256":hashlib.sha256(item_raw).hexdigest()})
     vm.value=AMOUNT*count
     recipient_text = "0x" + recipient.hex() if isinstance(recipient, bytes) else str(recipient)
-    with vm.prank(sponsor): assert int(c.create_grant("Open climate tooling",recipient_text,BASE,REV,json.dumps(plan))) == 0
+    with vm.prank(sponsor): assert int(c.create_grant("Open climate tooling",recipient_text,BASE,EVIDENCE_REV,REV,json.dumps(plan))) == 0
     vm.value=0
     return c, raw
 
 def test_multitranche_happy_path_and_sequential_gate(direct_vm,direct_deploy,direct_alice,direct_bob):
     c,raw=deploy_grant(direct_vm,direct_deploy,direct_alice,direct_bob,count=2)
+    grant=json.loads(c.get_grant(0))
+    assert grant['evidence_revision']==EVIDENCE_REV
+    assert grant['deliverable_revision']==REV
+    assert EVIDENCE_REV.encode() not in raw  # No self-referential Git commit.
     with direct_vm.prank(direct_bob):
         assert c.claim_milestone(1)=="PREVIOUS_MILESTONE_NOT_PAID"
         assert c.claim_milestone(0)=="MILESTONE_CLAIMED"
         assert c.submit_milestone(0)=="MILESTONE_SUBMITTED"
     direct_vm.mock_web(BASE+r"/milestone-0\.json$",{"status":200,"body":raw})
     direct_vm.mock_llm(r"Decide whether this sponsor-committed.*",json.dumps({"criteria":"PASS"}))
+    direct_vm.mock_web(ARTIFACT_URL.replace('.', r'\.')+'$', {'status':200,'body':ARTIFACT})
     assert int(c.assess_milestone(0))==3
     with direct_vm.prank(direct_bob): assert c.pay_milestone(0)=="MILESTONE_PAID"
     with direct_vm.prank(direct_bob): assert c.claim_milestone(1)=="MILESTONE_CLAIMED"
@@ -63,6 +71,7 @@ def test_unavailable_freezes_and_retries(direct_vm,direct_deploy,direct_alice,di
     assert json.loads(c.get_accounting())["active_locked"]==str(AMOUNT)
     direct_vm.mock_web(BASE+r"/milestone-0\.json$",{"status":200,"body":raw})
     direct_vm.mock_llm(r"Decide whether this sponsor-committed.*",json.dumps({"criteria":"PASS"}))
+    direct_vm.mock_web(ARTIFACT_URL.replace('.', r'\.')+'$', {'status':200,'body':ARTIFACT})
     assert int(c.assess_milestone(0))==3
 
 def test_expiry_refund_only_sponsor_and_no_replay(direct_vm,direct_deploy,direct_alice,direct_bob,direct_charlie):
@@ -81,7 +90,30 @@ def test_invalid_payable_plan_reverts_without_records(direct_vm,direct_deploy,di
     direct_vm.value=AMOUNT
     bad=[{"amount_wei":AMOUNT-1,"deadline_seconds":3600,"criteria":"x","manifest_sha256":"b"*64}]
     with direct_vm.prank(direct_alice):
-        with pytest.raises(Exception,match="DEPOSIT_PLAN_MISMATCH"): c.create_grant("x","0x"+direct_bob.hex(),BASE,REV,json.dumps(bad))
+        with pytest.raises(Exception,match="DEPOSIT_PLAN_MISMATCH"): c.create_grant("x","0x"+direct_bob.hex(),BASE,EVIDENCE_REV,REV,json.dumps(bad))
     direct_vm.value=0
     assert json.loads(c.get_counts())["grant_count"]==0
     assert json.loads(c.get_accounting())["total_deposited"]=="0"
+
+@pytest.mark.parametrize('field,value', [('grant_id',9),('milestone_index',9),('deliverable_revision','d'*40),('recipient','0x'+'1'*40)])
+def test_valid_digest_cannot_hide_wrong_subject(direct_vm,direct_deploy,direct_alice,direct_bob,field,value):
+    data=json.loads(manifest(direct_bob)); data[field]=value
+    raw=json.dumps(data,sort_keys=True).encode()
+    c,_=deploy_grant(direct_vm,direct_deploy,direct_alice,direct_bob,raw)
+    with direct_vm.prank(direct_bob): c.claim_milestone(0); c.submit_milestone(0)
+    direct_vm.mock_web(BASE+r'/milestone-0\.json$', {'status':200,'body':raw})
+    assert int(c.assess_milestone(0))==5
+    diag=json.loads(json.loads(c.get_milestone(0))['diagnostics'])
+    assert diag['digest']=='PASS' and diag['binding']=='FAIL'
+
+def test_fake_artifact_digest_cannot_authorize_payment(direct_vm,direct_deploy,direct_alice,direct_bob):
+    data=json.loads(manifest(direct_bob)); data['deliverables'][0]['sha256']='b'*64
+    raw=json.dumps(data,sort_keys=True).encode()
+    c,_=deploy_grant(direct_vm,direct_deploy,direct_alice,direct_bob,raw)
+    with direct_vm.prank(direct_bob): c.claim_milestone(0); c.submit_milestone(0)
+    direct_vm.mock_web(BASE+r'/milestone-0\.json$', {'status':200,'body':raw})
+    direct_vm.mock_web(ARTIFACT_URL.replace('.', r'\.')+'$', {'status':200,'body':ARTIFACT})
+    assert int(c.assess_milestone(0))==5
+    assert 'ARTIFACT_DIGEST_MISMATCH' in c.get_milestone(0)
+    assert c.pay_milestone(0)=='MILESTONE_NOT_APPROVED'
+    assert json.loads(c.get_accounting())['active_locked']==str(AMOUNT)
