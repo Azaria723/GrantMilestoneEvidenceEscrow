@@ -38,4 +38,6 @@ The revised source is deployed at `0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420` o
 
 This is testnet evidence, not an audit or production-readiness claim. Production hosting remains a separate step.
 
+Public frontend: https://grantmilestoneevidenceescrow.netlify.app/. It was checked without authentication and read back the final PAID lifecycle state; see [production verification](verification/netlify-production.md).
+
 See [architecture](docs/architecture.md), [threat model](docs/threat-model.md), and [revision correction](docs/revision-fix.md).
