@@ -1,0 +1,11 @@
+import {createClient} from '../frontend/node_modules/genlayer-js/dist/index.js';
+import {studionet} from '../frontend/node_modules/genlayer-js/dist/chains/index.js';
+import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+const contract=process.env.CONTRACT_ADDRESS;
+if(!/^0x[0-9a-fA-F]{40}$/.test(contract||''))throw new Error('Set CONTRACT_ADDRESS');
+const client=createClient({chain:studionet});
+const [schema,code,local]=await Promise.all([client.getContractSchema(contract),client.getContractCode(contract),readFile(new URL('../contracts/GrantMilestoneEvidenceEscrow.py',import.meta.url),'utf8')]);
+const hash=v=>createHash('sha256').update(v,'utf8').digest('hex');
+const result={contract,chain_id:studionet.id,schema_methods:schema.methods,deployed_source_sha256:hash(code),local_source_sha256:hash(local),source_parity:code===local,counts:JSON.parse(await client.readContract({address:contract,functionName:'get_counts',args:[]})),accounting:JSON.parse(await client.readContract({address:contract,functionName:'get_accounting',args:[]}))};
+console.log(JSON.stringify(result,null,2));
