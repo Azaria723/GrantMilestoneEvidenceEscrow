@@ -34,7 +34,7 @@ Direct tests execute the actual contract with mocked HTTP/LLM and transfer inten
 
 ## Deployment verification
 
-The revised source is deployed at `0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420` on Studionet. Deployed source equals local source byte-for-byte. A real 0.001 GEN lifecycle executed a forged-binding rejection, incomplete-criteria rejection, corrected approval, protected approved custody, payout, and replay rejection. See the [Studionet ledger](verification/studionet-e2e.md) and committed RPC receipts. The old address `0xfB34BB3338097b22ED036194BB796263920C331A` remains incompatible and must not be used.
+The historical deployments `0xfB34BB3338097b22ED036194BB796263920C331A` and `0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420` must not be used. Their outgoing payout path could finalize the parent call while the linked transfer failed. The current source uses an EOA `SEND`, keeps settlement pending, and changes milestone/accounting state only after validator-retrieved Studionet receipts prove the linked recipient credit. Deploy this revision as a fresh instance, verify byte-for-byte source parity, then run the recipient-balance proof before configuring the frontend.
 
 This is testnet evidence, not an audit or production-readiness claim. Production hosting remains a separate step.
 

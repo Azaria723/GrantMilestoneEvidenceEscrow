@@ -5,7 +5,18 @@ from genlayer import *
 import hashlib
 import json
 import typing
+import base64
 from datetime import datetime, timezone
+from genlayer.py import calldata
+
+
+@gl.evm.contract_interface
+class _Recipient:
+    class View:
+        pass
+
+    class Write:
+        pass
 
 
 class GrantMilestoneEvidenceEscrow(gl.Contract):
@@ -14,6 +25,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
     total_deposited: u256
     total_paid: u256
     total_refunded: u256
+    total_pending: u256
 
     grant_sponsors: TreeMap[u256, Address]
     grant_recipients: TreeMap[u256, Address]
@@ -36,6 +48,12 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
     milestone_attempts: TreeMap[u256, u256]
     milestone_verdicts: TreeMap[u256, str]
     milestone_diagnostics: TreeMap[u256, str]
+    settlement_states: TreeMap[u256, u256]
+    settlement_attempts: TreeMap[u256, u256]
+    settlement_kinds: TreeMap[u256, str]
+    settlement_proofs: TreeMap[u256, str]
+
+    SETTLEMENT_RPC = 'https://studio.genlayer.com/api'
 
     def __init__(self):
         self.grant_count = u256(0)
@@ -43,6 +61,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
         self.total_deposited = u256(0)
         self.total_paid = u256(0)
         self.total_refunded = u256(0)
+        self.total_pending = u256(0)
 
     def _now(self) -> u256:
         return u256(int(datetime.now(timezone.utc).timestamp()))
@@ -150,6 +169,10 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
             self.milestone_attempts[milestone_id] = u256(0)
             self.milestone_verdicts[milestone_id] = "PLANNED"
             self.milestone_diagnostics[milestone_id] = "{}"
+            self.settlement_states[milestone_id] = u256(0)
+            self.settlement_attempts[milestone_id] = u256(0)
+            self.settlement_kinds[milestone_id] = ''
+            self.settlement_proofs[milestone_id] = ''
 
         self.grant_count = grant_id + u256(1)
         self.milestone_count = first + u256(len(plan))
@@ -312,7 +335,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
         return self.milestone_statuses[milestone_id]
 
     @gl.public.write
-    def pay_milestone(self, milestone_id: u256) -> str:
+    def pay_milestone(self, milestone_id: u256, attempt: u256) -> str:
         if milestone_id >= self.milestone_count:
             return "MILESTONE_NOT_FOUND"
         if self.milestone_statuses[milestone_id] != u256(3):
@@ -321,13 +344,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
         recipient = self.grant_recipients[grant_id]
         if gl.message.sender_address not in [recipient, self.grant_sponsors[grant_id]]:
             return "UNAUTHORIZED"
-        amount = self.milestone_amounts[milestone_id]
-        self.milestone_statuses[milestone_id] = u256(4)
-        self.milestone_amounts[milestone_id] = u256(0)
-        self.grant_remaining[grant_id] = self.grant_remaining[grant_id] - amount
-        self.total_paid = self.total_paid + amount
-        gl.get_contract_at(recipient).emit_transfer(value=amount)
-        return "MILESTONE_PAID"
+        return self._request_settlement(milestone_id, attempt, 'PAY', recipient)
 
     @gl.public.write
     def expire_milestone(self, milestone_id: u256) -> str:
@@ -345,7 +362,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
         return "MILESTONE_EXPIRED"
 
     @gl.public.write
-    def refund_expired_milestone(self, milestone_id: u256) -> str:
+    def refund_expired_milestone(self, milestone_id: u256, attempt: u256) -> str:
         if milestone_id >= self.milestone_count:
             return "MILESTONE_NOT_FOUND"
         grant_id = self.milestone_grants[milestone_id]
@@ -354,15 +371,145 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
             return "SPONSOR_ONLY"
         if self.milestone_statuses[milestone_id] != u256(9):
             return "MILESTONE_NOT_EXPIRED"
+        return self._request_settlement(milestone_id, attempt, 'REFUND', sponsor)
+
+    def _request_settlement(self, milestone_id: u256, attempt: u256, kind: str, target: Address) -> str:
+        if self.settlement_states[milestone_id] == u256(1):
+            return 'SETTLEMENT_PENDING'
+        if self.settlement_states[milestone_id] == u256(2):
+            return 'SETTLEMENT_ALREADY_CONFIRMED'
+        if attempt != self.settlement_attempts[milestone_id] + u256(1):
+            return 'INVALID_SETTLEMENT_ATTEMPT'
         amount = self.milestone_amounts[milestone_id]
         if amount == u256(0):
-            return "NOTHING_TO_REFUND"
-        self.milestone_statuses[milestone_id] = u256(6)
+            return 'NOTHING_TO_SETTLE'
+        # A failed outgoing message may already have consumed balance. Do not
+        # replace it using GEN reserved for another milestone.
+        active = self.total_deposited - self.total_paid - self.total_refunded
+        if self.balance < active - self.total_pending:
+            return 'SETTLEMENT_RESERVE_SHORTFALL'
+        _Recipient(target).emit_transfer(value=amount)
+        self.settlement_states[milestone_id] = u256(1)
+        self.settlement_attempts[milestone_id] = attempt
+        self.settlement_kinds[milestone_id] = kind
+        self.settlement_proofs[milestone_id] = ''
+        self.total_pending = self.total_pending + amount
+        return 'SETTLEMENT_REQUESTED'
+
+    @gl.public.write.payable
+    def fund_settlement_reserve(self) -> str:
+        if gl.message.value == 0:
+            raise gl.vm.UserError('POSITIVE_RESERVE_REQUIRED')
+        return 'RESERVE_FUNDED'
+
+    def _settlement_evidence(self, parent: dict, child: dict, parent_hash: str,
+                             contract: str, caller: str, target: str, milestone: int,
+                             attempt: int, amount: int, method: str) -> str:
+        try:
+            if parent['hash'].lower() != parent_hash or parent['status'] != 'FINALIZED':
+                return 'UNRESOLVED'
+            if parent['from_address'].lower() != caller or parent['to_address'].lower() != contract:
+                return 'UNRESOLVED'
+            if parent['type'] != 2 or int(parent['value']) != 0:
+                return 'UNRESOLVED'
+            call = calldata.decode(base64.b64decode(parent['data']['calldata']))
+            if call != {'method':method, 'args':[milestone, attempt]}:
+                return 'UNRESOLVED'
+            leaders = parent['consensus_data']['leader_receipt']
+            if not leaders or leaders[0]['execution_result'] != 'SUCCESS':
+                return 'UNRESOLVED'
+            if parent['triggered_transactions'] != [child['hash']]:
+                return 'UNRESOLVED'
+            if child['triggered_by'].lower() != parent_hash or child['status'] != 'FINALIZED':
+                return 'UNRESOLVED'
+            if child['from_address'].lower() != contract or child['to_address'].lower() != target:
+                return 'UNRESOLVED'
+            if child['type'] != 0 or int(child['value']) != amount:
+                return 'UNRESOLVED'
+            receipts = (child.get('consensus_data') or {}).get('leader_receipt') or []
+            failed = bool(receipts and receipts[0].get('execution_result') == 'ERROR')
+            if child.get('value_credited') is True and not failed:
+                return 'PAID'
+            if child.get('value_credited') is False and failed:
+                return 'FAILED'
+        except Exception:
+            pass
+        return 'UNRESOLVED'
+
+    @gl.public.write
+    def reconcile_settlement(self, milestone_id: u256, parent_hash: str) -> str:
+        if milestone_id >= self.milestone_count:
+            return 'MILESTONE_NOT_FOUND'
+        if self.settlement_states[milestone_id] != u256(1):
+            return 'SETTLEMENT_NOT_PENDING'
+        if len(parent_hash) != 66 or not parent_hash.startswith('0x') or any(c not in '0123456789abcdefABCDEF' for c in parent_hash[2:]):
+            return 'INVALID_TRANSACTION_HASH'
+        parent_hash = parent_hash.lower()
+        grant_id = self.milestone_grants[milestone_id]
+        kind = self.settlement_kinds[milestone_id]
+        target = self.grant_recipients[grant_id] if kind == 'PAY' else self.grant_sponsors[grant_id]
+        contract = str(gl.message.contract_address).lower()
+        caller = str(gl.message.sender_address).lower()
+        expected_caller = target if kind == 'PAY' else self.grant_sponsors[grant_id]
+        # pay may be requested by recipient or sponsor; bind the receipt caller
+        # to an authorized party rather than to the reconciler.
+        if kind == 'PAY' and caller not in [str(target).lower(), str(self.grant_sponsors[grant_id]).lower()]:
+            return 'UNAUTHORIZED'
+        if kind == 'REFUND' and caller != str(expected_caller).lower():
+            return 'SPONSOR_ONLY'
+        attempt = int(self.settlement_attempts[milestone_id])
+        amount = int(self.milestone_amounts[milestone_id])
+        method = 'pay_milestone' if kind == 'PAY' else 'refund_expired_milestone'
+
+        def retrieve() -> str:
+            def rpc(rpc_method: str, params: list) -> typing.Any:
+                response = gl.nondet.web.post(self.SETTLEMENT_RPC, headers={'Content-Type':'application/json'},
+                    body=json.dumps({'jsonrpc':'2.0','id':1,'method':rpc_method,'params':params}))
+                if response.status != 200 or response.body is None or len(response.body) > 500000:
+                    return None
+                payload = json.loads(response.body.decode('utf-8'))
+                if payload.get('error') or payload.get('id') != 1:
+                    return None
+                return payload['result']
+            try:
+                if int(rpc('eth_chainId', []), 16) != 61999:
+                    return 'UNRESOLVED'
+                parent = rpc('eth_getTransactionByHash', [parent_hash])
+                children = parent.get('triggered_transactions', [])
+                if len(children) != 1:
+                    return 'UNRESOLVED'
+                child = rpc('eth_getTransactionByHash', [children[0]])
+                receipt_caller = str(parent.get('from_address', '')).lower()
+                if kind == 'PAY' and receipt_caller not in [str(target).lower(), str(self.grant_sponsors[grant_id]).lower()]:
+                    return 'UNRESOLVED'
+                if kind == 'REFUND' and receipt_caller != str(self.grant_sponsors[grant_id]).lower():
+                    return 'UNRESOLVED'
+                return self._settlement_evidence(parent, child, parent_hash, contract, receipt_caller,
+                    str(target).lower(), int(milestone_id), attempt, amount, method)
+            except Exception:
+                return 'UNRESOLVED'
+
+        verdict = gl.eq_principle.strict_eq(retrieve)
+        if verdict not in ['PAID', 'FAILED']:
+            return 'SETTLEMENT_UNRESOLVED'
+        self.total_pending = self.total_pending - self.milestone_amounts[milestone_id]
+        self.settlement_proofs[milestone_id] = parent_hash
+        if verdict == 'FAILED':
+            self.settlement_states[milestone_id] = u256(3)
+            return 'SETTLEMENT_FAILED_RETRYABLE'
+        amount_value = self.milestone_amounts[milestone_id]
+        self.settlement_states[milestone_id] = u256(2)
         self.milestone_amounts[milestone_id] = u256(0)
-        self.grant_remaining[grant_id] = self.grant_remaining[grant_id] - amount
-        self.total_refunded = self.total_refunded + amount
-        gl.get_contract_at(sponsor).emit_transfer(value=amount)
-        return "EXPIRED_TRANCHE_REFUNDED"
+        self.grant_remaining[grant_id] = self.grant_remaining[grant_id] - amount_value
+        if kind == 'PAY':
+            self.milestone_statuses[milestone_id] = u256(4)
+            self.milestone_verdicts[milestone_id] = 'PAID'
+            self.total_paid = self.total_paid + amount_value
+            return 'MILESTONE_PAID'
+        self.milestone_statuses[milestone_id] = u256(6)
+        self.milestone_verdicts[milestone_id] = 'REFUNDED'
+        self.total_refunded = self.total_refunded + amount_value
+        return 'EXPIRED_TRANCHE_REFUNDED'
 
     @gl.public.view
     def get_counts(self) -> str:
@@ -370,7 +517,7 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
 
     @gl.public.view
     def get_accounting(self) -> str:
-        return json.dumps({"total_deposited":str(self.total_deposited),"total_paid":str(self.total_paid),"total_refunded":str(self.total_refunded),"active_locked":str(self.total_deposited-self.total_paid-self.total_refunded)}, sort_keys=True)
+        return json.dumps({"total_deposited":str(self.total_deposited),"total_paid":str(self.total_paid),"total_refunded":str(self.total_refunded),"active_locked":str(self.total_deposited-self.total_paid-self.total_refunded),"pending_settlement":str(self.total_pending),"settlement_rpc":self.SETTLEMENT_RPC}, sort_keys=True)
 
     @gl.public.view
     def get_grant(self, grant_id: u256) -> str:
@@ -397,4 +544,4 @@ class GrantMilestoneEvidenceEscrow(gl.Contract):
         if milestone_id >= self.milestone_count:
             return json.dumps({"error":"MILESTONE_NOT_FOUND"})
         grant_id = self.milestone_grants[milestone_id]
-        return json.dumps({"milestone_id":int(milestone_id),"grant_id":int(grant_id),"local_index":int(self.milestone_local_indexes[milestone_id]),"amount_wei":str(self.milestone_amounts[milestone_id]),"deadline_at":int(self.milestone_deadlines[milestone_id]),"criteria":self.milestone_criteria[milestone_id],"manifest_url":self._manifest_url(grant_id,milestone_id),"manifest_sha256":self.milestone_manifest_digests[milestone_id],"status":int(self.milestone_statuses[milestone_id]),"attempts":int(self.milestone_attempts[milestone_id]),"verdict":self.milestone_verdicts[milestone_id],"diagnostics":self.milestone_diagnostics[milestone_id]}, sort_keys=True)
+        return json.dumps({"milestone_id":int(milestone_id),"grant_id":int(grant_id),"local_index":int(self.milestone_local_indexes[milestone_id]),"amount_wei":str(self.milestone_amounts[milestone_id]),"deadline_at":int(self.milestone_deadlines[milestone_id]),"criteria":self.milestone_criteria[milestone_id],"manifest_url":self._manifest_url(grant_id,milestone_id),"manifest_sha256":self.milestone_manifest_digests[milestone_id],"status":int(self.milestone_statuses[milestone_id]),"attempts":int(self.milestone_attempts[milestone_id]),"verdict":self.milestone_verdicts[milestone_id],"diagnostics":self.milestone_diagnostics[milestone_id],"settlement_state":int(self.settlement_states[milestone_id]),"settlement_attempt":int(self.settlement_attempts[milestone_id]),"settlement_kind":self.settlement_kinds[milestone_id],"settlement_proof":self.settlement_proofs[milestone_id]}, sort_keys=True)
