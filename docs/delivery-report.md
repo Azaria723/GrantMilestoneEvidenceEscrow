@@ -11,11 +11,34 @@ The contract maintains the equation:
 total_deposited = total_paid + total_refunded + active_locked
 
 The sponsor deposits the exact sum of milestone amounts at grant creation.
-Paying one approved milestone decreases its outstanding amount and the grant's
-remaining custody, and increases total_paid by the same amount. Refunding an
-expired milestone similarly increases total_refunded. These transitions preserve
-the equation and do not release other tranches. The milestone enters its terminal
-state and its amount is cleared before a transfer is emitted.
+Settlement is deliberately two-phase. `pay_milestone(mid, attempt)` emits one
+native EOA `SEND` through `@gl.evm.contract_interface`, then records
+`settlement_state = PENDING`; it does not mark the milestone PAID, clear its
+amount, reduce grant custody, or increase `total_paid`. The same rule protects
+expired refunds.
+
+`reconcile_settlement` independently retrieves the parent and linked child
+receipts from the contract's fixed Studionet RPC under validator consensus. It
+requires chain 61999, exact parent calldata and authorized caller, exactly one
+linked child, child type `SEND` (0), the contract as sender, the stored EOA as
+recipient, the exact milestone amount, FINALIZED status, and
+`value_credited = true` without an ERROR receipt. Only after all checks pass is
+the milestone marked PAID, its amount cleared, grant remaining reduced, and
+`total_paid` increased. This preserves the accounting equation without treating
+parent finality as proof that the recipient received funds.
+
+An explicit failed and uncredited child changes only the settlement attempt to a
+retryable failure. The milestone remains APPROVED with its amount intact. A new
+attempt is monotonic and allowed only when contract balance still covers all
+other locked liabilities, so a failed outgoing transfer cannot be replaced with
+another grant's reserved GEN. Missing, malformed, unlinked, pending, or
+contradictory receipts remain unresolved and cannot unlock payment or retry.
+
+The frontend waits for parent finality, polls the linked child result, submits
+reconciliation, waits for reconciliation finality, and automatically refreshes
+all grants, milestones, settlement state, and accounting. It also refreshes
+authoritative state after every other write, so users do not need a manual page
+reload to observe finalized results.
 
 ## Sequential milestone claim dependency
 
