@@ -5,7 +5,8 @@ import {privateKeyToAccount} from '../frontend/node_modules/viem/_esm/accounts/i
 import {writeFile,mkdir} from 'node:fs/promises';
 const encode=v=>JSON.stringify(v,(_,x)=>typeof x==='bigint'?x.toString():x,null,2);
 async function record(receipt){await mkdir(new URL('../verification/receipts/',import.meta.url),{recursive:true});await writeFile(new URL(`../verification/receipts/${receipt.hash}.json`,import.meta.url),encode(receipt));console.log(encode({hash:receipt.hash,status:receipt.status,status_name:receipt.status_name,result:receipt.result_name,execution:receipt.consensus_data?.leader_receipt?.[0]?.execution_result}));}
-const address='0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420';
+const address=process.env.CONTRACT_ADDRESS;
+if(!/^0x[0-9a-fA-F]{40}$/.test(address||''))throw new Error('Set CONTRACT_ADDRESS to the fresh settlement deployment');
 const reader=createClient({chain:studionet});
 const [mode,method,raw='[]',value='0']=process.argv.slice(2);
 const args=JSON.parse(raw).map(v=>typeof v==='number'?BigInt(v):v);

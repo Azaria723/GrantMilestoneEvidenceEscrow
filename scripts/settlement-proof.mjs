@@ -1,0 +1,31 @@
+import {createClient} from '../frontend/node_modules/genlayer-js/dist/index.js';
+import {studionet} from '../frontend/node_modules/genlayer-js/dist/chains/index.js';
+import {TransactionStatus} from '../frontend/node_modules/genlayer-js/dist/types/index.js';
+import {privateKeyToAccount} from '../frontend/node_modules/viem/_esm/accounts/index.js';
+
+const contract=process.env.CONTRACT_ADDRESS;
+const key=process.env.TEST_KEY;
+const milestone=BigInt(process.env.MILESTONE_ID||'0');
+if(!/^0x[0-9a-fA-F]{40}$/.test(contract||'')||!key)throw new Error('Set CONTRACT_ADDRESS and TEST_KEY');
+const account=privateKeyToAccount(`0x${key.replace(/^0x/,'')}`);
+const reader=createClient({chain:studionet});
+const writer=createClient({chain:studionet,account});
+const parse=async(name,args=[])=>JSON.parse(await reader.readContract({address:contract,functionName:name,args}));
+const rpc=async(method,params=[])=>{const r=await fetch('https://studio.genlayer.com/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});const p=await r.json();if(!r.ok||p.error)throw new Error(JSON.stringify(p.error||r.status));return p.result};
+const send=async(name,args)=>{const hash=await writer.writeContract({address:contract,functionName:name,args});await reader.waitForTransactionReceipt({hash,status:TransactionStatus.FINALIZED});return hash};
+const beforeState=await parse('get_milestone',[milestone]);
+if(beforeState.status!==3)throw new Error('Milestone must be APPROVED');
+const grant=await parse('get_grant',[BigInt(beforeState.grant_id)]);
+if(account.address.toLowerCase()!==grant.recipient.toLowerCase()&&account.address.toLowerCase()!==grant.sponsor.toLowerCase())throw new Error('TEST_KEY is not an authorized settlement caller');
+const before=BigInt(await rpc('eth_getBalance',[grant.recipient,'latest']));
+const parentHash=await send('pay_milestone',[milestone,BigInt(beforeState.settlement_attempt)+1n]);
+let parent,child;
+for(let i=0;i<80;i++){parent=await rpc('eth_getTransactionByHash',[parentHash]);const links=parent?.triggered_transactions||[];if(links.length===1){child=await rpc('eth_getTransactionByHash',[links[0]]);if(child?.status==='FINALIZED')break}await new Promise(r=>setTimeout(r,3000))}
+const amount=BigInt(beforeState.amount_wei);const eq=(a,b)=>a?.toLowerCase()===b?.toLowerCase();
+if(!parent||!child||parent.status!=='FINALIZED'||parent.triggered_transactions?.length!==1||!eq(child.triggered_by,parent.hash)||child.status!=='FINALIZED'||child.type!==0||!eq(child.from_address,contract)||!eq(child.to_address,grant.recipient)||BigInt(child.value)!==amount||child.value_credited!==true||child.consensus_data?.leader_receipt?.[0]?.execution_result==='ERROR')throw new Error('Linked recipient credit proof failed');
+const after=BigInt(await rpc('eth_getBalance',[grant.recipient,'latest']));
+if(after-before!==amount)throw new Error(`Recipient balance delta mismatch: ${after-before}`);
+const reconcileHash=await send('reconcile_settlement',[milestone,parentHash]);
+const finalState=await parse('get_milestone',[milestone]);
+if(finalState.status!==4||finalState.settlement_state!==2||finalState.amount_wei!=='0'||finalState.settlement_proof.toLowerCase()!==parentHash.toLowerCase())throw new Error('Confirmed accounting state mismatch');
+console.log(JSON.stringify({contract,milestone_id:String(milestone),recipient:grant.recipient,balance_before_wei:String(before),balance_after_wei:String(after),balance_delta_wei:String(after-before),parent_hash:parentHash,child_hash:child.hash,reconciliation_hash:reconcileHash,value_credited:child.value_credited,final_status:'PAID'},null,2));
