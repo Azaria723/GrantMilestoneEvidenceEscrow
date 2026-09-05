@@ -38,6 +38,6 @@ The corrected source is deployed at `0xEF27Ee5207071E1e8795bbCD00459c64d2Be85C3`
 
 This is testnet evidence, not an audit or production-readiness claim. Production hosting remains a separate step.
 
-Public frontend: https://grantmilestoneevidenceescrow.netlify.app/. It was checked without authentication and read back the final PAID lifecycle state; see [production verification](verification/netlify-production.md).
+Public frontend: https://grant-milestone-evidence-escrow.pages.dev/. The Cloudflare Pages production build was checked without authentication, returned HTTP 200, and was verified to contain the corrected `0xEF27Ee5207071E1e8795bbCD00459c64d2Be85C3` contract address; see [production verification](verification/cloudflare-production.md).
 
 See [architecture](docs/architecture.md), [threat model](docs/threat-model.md), and [revision correction](docs/revision-fix.md).
