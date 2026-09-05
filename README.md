@@ -34,7 +34,7 @@ Direct tests execute the actual contract with mocked HTTP/LLM and transfer inten
 
 ## Deployment verification
 
-The historical deployments `0xfB34BB3338097b22ED036194BB796263920C331A` and `0x37Eb0776f03fa1C18ac9F0F327335dfE9388b420` must not be used. Their outgoing payout path could finalize the parent call while the linked transfer failed. The current source uses an EOA `SEND`, keeps settlement pending, and changes milestone/accounting state only after validator-retrieved Studionet receipts prove the linked recipient credit. Deploy this revision as a fresh instance, verify byte-for-byte source parity, then run the recipient-balance proof before configuring the frontend.
+The corrected source is deployed at `0xEF27Ee5207071E1e8795bbCD00459c64d2Be85C3`. Deployed and local source SHA-256 match byte-for-byte. Its live lifecycle includes fail-closed rejected evidence, a fully bound APPROVED delivery, a native EOA `SEND` with `value_credited=true`, exact 0.001 GEN recipient balance increase, and reconciliation before PAID accounting. See [EF27 deployment and settlement proof](verification/deployment-ef27.md). Historical deployments `0xfB34…331A` and `0x37Eb…b420` must not be used.
 
 This is testnet evidence, not an audit or production-readiness claim. Production hosting remains a separate step.
 
